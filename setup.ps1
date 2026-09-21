@@ -5,40 +5,42 @@
 $ErrorActionPreference = "Stop"
 
 # Colors for output
-function Write-Status { param([string]$Message) Write-Host $Message -ForegroundColor Cyan }
-function Write-Success { param([string]$Message) Write-Host $Message -ForegroundColor Green }
-function Write-Warning { param([string]$Message) Write-Host $Message -ForegroundColor Yellow }
-function Write-Error { param([string]$Message) Write-Host $Message -ForegroundColor Red }
+function Write-Info { param([string]$Message) Write-Host $Message -ForegroundColor Cyan }
+function Write-Ok { param([string]$Message) Write-Host $Message -ForegroundColor Green }
+function Write-Warn { param([string]$Message) Write-Host $Message -ForegroundColor Yellow }
+function Write-Err { param([string]$Message) Write-Host $Message -ForegroundColor Red }
 
-Write-Host "`n╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-Write-Host "║          OmniRoute free-coding-stable Setup              ║" -ForegroundColor Magenta
-Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
+Write-Host "|             OmniRoute free-coding Setup                  |" -ForegroundColor Magenta
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
 Write-Host ""
 
 # --- Step 1: Verify prerequisites ---
-Write-Status "Step 1/5: Checking prerequisites..."
+Write-Info "Step 1/5: Checking prerequisites..."
 
 $missing = @()
 
 if (-not (Get-Command omniroute -ErrorAction SilentlyContinue)) {
     $missing += "OmniRoute CLI not found in PATH"
 }
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    $missing += "Node.js not found in PATH"
+if (-not (Get-Command python -ErrorAction SilentlyContinue) -and -not (Get-Command node -ErrorAction SilentlyContinue)) {
+    $missing += "Neither Python nor Node.js found in PATH"
 }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     $missing += "Git not found in PATH"
 }
 
 if ($missing.Count -gt 0) {
-    Write-Error "Missing prerequisites:`n  $($missing -join "`n  ")"
+    $missingList = $missing -join "`n  "
+    Write-Err "Missing prerequisites:`n  $missingList"
     Write-Host "Please install the missing items and re-run this script." -ForegroundColor Yellow
     exit 1
 }
-Write-Success "  All prerequisites found."
+Write-Ok "  All prerequisites found."
 
 # --- Step 2: Ensure OmniRoute server is running ---
-Write-Status "Step 2/5: Checking OmniRoute server..."
+Write-Info "Step 2/5: Checking OmniRoute server..."
 
 $serverRunning = $false
 try {
@@ -51,10 +53,10 @@ try {
 }
 
 if (-not $serverRunning) {
-    Write-Warning "  OmniRoute server is not running. Starting it..."
-    Start-Process omniroute -ArgumentList "serve" -WindowStyle Minimized
+    Write-Warn "  OmniRoute server is not running. Starting it..."
+    Start-Process cmd.exe -ArgumentList "/c start /b omniroute serve" -WindowStyle Hidden
     Write-Host "  Waiting for server to become ready..." -ForegroundColor Yellow
-    $maxWait = 30
+    $maxWait = 15
     for ($i = 1; $i -le $maxWait; $i++) {
         Start-Sleep -Seconds 2
         try {
@@ -64,49 +66,84 @@ if (-not $serverRunning) {
                 break
             }
         } catch {}
-        Write-Host "    Still waiting... ($i/$($maxWait/2))" -ForegroundColor DarkYellow -NoNewline
-        Write-Host "`r" -NoNewline
+        Write-Host "    Still waiting... ($i/$maxWait)`r" -ForegroundColor DarkYellow -NoNewline
     }
     if (-not $serverRunning) {
-        Write-Error "OmniRoute server did not start within $maxWait seconds."
-        exit 1
+        Write-Warn "OmniRoute server not detected yet, continuing with offline SQLite configuration..."
+    } else {
+        Write-Ok "  OmniRoute server is ready."
     }
-    Write-Success "  OmniRoute server is ready."
 } else {
-    Write-Success "  OmniRoute server is already running."
+    Write-Ok "  OmniRoute server is already running."
 }
 
-# --- Step 3: Create/Update the free-coding-stable combo ---
-Write-Status "Step 3/5: Configuring the free-coding-stable model combo..."
+# --- Step 3: Create/Update the free-coding combo ---
+Write-Info "Step 3/5: Configuring the free-coding model combo..."
 
-$nodeResult = node create_combo.js sync 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to configure combo: $nodeResult"
+$scriptRan = $false
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    $comboResult = python create_combo.py sync 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $scriptRan = $true
+    }
+}
+if (-not $scriptRan -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    $comboResult = node create_combo.js sync 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $scriptRan = $true
+    }
+}
+
+if (-not $scriptRan) {
+    Write-Err "Failed to configure combo: $comboResult"
     exit 1
 }
-Write-Success "  Combo configured successfully."
-Write-Host $nodeResult
+Write-Ok "  Combo 'free-coding' configured successfully."
+Write-Host $comboResult
 
-# --- Step 4: Configure environment for Claude Code ---
-Write-Status "Step 4/5: Configuring Claude Code environment..."
+# --- Step 4: Configure Claude Code environment ---
+Write-Info "Step 4/5: Configuring Claude Code profile 'free-coding'..."
 
-$claudeProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\omniroute"
+# Remove legacy profile if present
+$legacyProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\ollama-local-qwen2-5-coder-7b"
+if (Test-Path $legacyProfileDir) {
+    try {
+        cmd.exe /c "rd /s /q `"$legacyProfileDir`"" 2>$null
+        Write-Ok "  Removed legacy profile: ~/.claude/profiles/ollama-local-qwen2-5-coder-7b"
+    } catch {
+        Write-Warn "  Could not remove legacy profile folder: $_"
+    }
+}
+
+$claudeProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\free-coding"
 if (-not (Test-Path $claudeProfileDir)) {
     New-Item -ItemType Directory -Path $claudeProfileDir -Force | Out-Null
 }
 
-# Write env file for the profile
-$envContent = @"
-ANTHROPIC_BASE_URL=http://localhost:20128
-ANTHROPIC_API_KEY=sk-omniroute
-"@
-Set-Content -Path (Join-Path $claudeProfileDir ".env") -Value $envContent -Encoding UTF8
+$claudeSettings = [ordered]@{
+    '$schema' = 'https://json.schemastore.org/claude-code-settings.json'
+    model = 'free-coding'
+    env = [ordered]@{
+        ANTHROPIC_BASE_URL = 'http://localhost:20128'
+        ANTHROPIC_MODEL = 'free-coding'
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW = '190000'
+        CLAUDE_CODE_DISABLE_THINKING = '1'
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = '1'
+        DISABLE_INTERLEAVED_THINKING = '1'
+    }
+    alwaysThinkingEnabled = $false
+    theme = 'dark'
+    thinking = $false
+    maxThinkingTokens = 0
+} | ConvertTo-Json -Depth 5
+Set-Content -Path (Join-Path $claudeProfileDir "settings.json") -Value $claudeSettings -Encoding UTF8
 
-Write-Success "  Claude Code profile written to ~/.claude/profiles/omniroute/"
-Write-Host "    Activate it with: claude --profile omniroute --model free-coding-stable" -ForegroundColor Gray
+Write-Ok "  Claude Code profile written to ~/.claude/profiles/free-coding/settings.json"
+Write-Host "    Activate it with: omniroute launch --profile free-coding" -ForegroundColor Gray
 
-# --- Step 5: Configure environment for OpenCode ---
-Write-Status "Step 5/5: Configuring OpenCode environment..."
+# --- Step 5: Configure OpenCode environment ---
+Write-Info "Step 5/5: Configuring OpenCode environment..."
 
 $opencodeConfigDir = Join-Path $env:USERPROFILE ".config\opencode"
 if (-not (Test-Path $opencodeConfigDir)) {
@@ -115,46 +152,51 @@ if (-not (Test-Path $opencodeConfigDir)) {
 
 $opencodeConfigPath = Join-Path $opencodeConfigDir "opencode.json"
 
-# Build or update the OpenCode config
-$opencodeConfig = @{
-    provider = @{}
-}
-
-if (Test-Path $opencodeConfigPath) {
-    try {
-        $existing = Get-Content $opencodeConfigPath -Raw | ConvertFrom-Json
-        $opencodeConfig = $existing
-    } catch {
-        Write-Warning "  Could not parse existing opencode.json, backing up and overwriting."
-        Copy-Item $opencodeConfigPath "$opencodeConfigPath.bak"
+$opencodeConfig = [ordered]@{
+    '$schema' = 'https://opencode.ai/config.json'
+    provider = [ordered]@{
+        omniroute = [ordered]@{
+            name = 'OmniRoute'
+            npm = '@ai-sdk/openai-compatible'
+            options = [ordered]@{
+                baseURL = 'http://localhost:20128/v1'
+                apiKey = 'sk-omniroute'
+            }
+            models = [ordered]@{
+                'free-coding' = [ordered]@{
+                    name = 'free-coding'
+                    limit = [ordered]@{
+                        context = 128000
+                        input = 128000
+                        output = 128000
+                    }
+                }
+            }
+        }
     }
-}
+    model = 'omniroute/free-coding'
+} | ConvertTo-Json -Depth 5
+Set-Content -Path $opencodeConfigPath -Value $opencodeConfig -Encoding UTF8
 
-# Add/ensure the omniroute provider
-$opencodeConfig.provider | Add-Member -Force -NotePropertyName "omniroute" -NotePropertyValue @{
-    apiKey = "sk-omniroute"
-    baseURL = "http://localhost:20128/v1"
-}
-
-$opencodeConfig | ConvertTo-Json -Depth 5 | Set-Content -Path $opencodeConfigPath -Encoding UTF8
-
-Write-Success "  OpenCode config written to ~/.config/opencode/opencode.json"
-Write-Host "    Activate it with: opencode --model omniroute/free-coding-stable" -ForegroundColor Gray
+Write-Ok "  OpenCode config written to ~/.config/opencode/opencode.json"
+Write-Host "    Activate it with: opencode (default model: omniroute/free-coding)" -ForegroundColor Gray
 
 # --- Done ---
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-Write-Host "║  Setup complete!                                        ║" -ForegroundColor Magenta
-Write-Host "╠══════════════════════════════════════════════════════════╣" -ForegroundColor Magenta
-Write-Host "║                                                          ║" -ForegroundColor Magenta
-Write-Host "║  Claude Code:                                           ║" -ForegroundColor Magenta
-Write-Host "║    claude --profile omniroute --model free-coding-stable║" -ForegroundColor White
-Write-Host "║                                                          ║" -ForegroundColor Magenta
-Write-Host "║  OpenCode:                                              ║" -ForegroundColor Magenta
-Write-Host "║    opencode --model omniroute/free-coding-stable        ║" -ForegroundColor White
-Write-Host "║                                                          ║" -ForegroundColor Magenta
-Write-Host "║  Manage models:                                         ║" -ForegroundColor Magenta
-Write-Host "║    node create_combo.js add <provider> <model_slug>     ║" -ForegroundColor White
-Write-Host "║    node create_combo.js remove <model_slug>            ║" -ForegroundColor White
-Write-Host "║    node create_combo.js list                           ║" -ForegroundColor White
-Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
+Write-Host "|  Setup complete!                                         |" -ForegroundColor Magenta
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
+Write-Host "|                                                          |" -ForegroundColor Magenta
+Write-Host "|  Claude Code:                                            |" -ForegroundColor Magenta
+Write-Host "|    omniroute launch --profile free-coding                |" -ForegroundColor White
+Write-Host "|    (or: claude --profile free-coding)                    |" -ForegroundColor Gray
+Write-Host "|                                                          |" -ForegroundColor Magenta
+Write-Host "|  OpenCode:                                               |" -ForegroundColor Magenta
+Write-Host "|    opencode                                              |" -ForegroundColor White
+Write-Host "|    (or: opencode -m omniroute/free-coding)               |" -ForegroundColor Gray
+Write-Host "|                                                          |" -ForegroundColor Magenta
+Write-Host "|  Manage models:                                          |" -ForegroundColor Magenta
+Write-Host "|    python create_combo.py add <provider> <model_slug>    |" -ForegroundColor White
+Write-Host "|    python create_combo.py remove <model_slug>            |" -ForegroundColor White
+Write-Host "|    python create_combo.py list                           |" -ForegroundColor White
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta

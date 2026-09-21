@@ -1,225 +1,91 @@
-// OmniRoute free-coding-stable Combo Manager
-// Usage:
-//   node create_combo.js                                    (applies default list)
-//   node create_combo.js add <provider> <model_slug>       (appends model automatically)
-//   node create_combo.js remove <model_slug>               (removes model)
-//   node create_combo.js list                              (shows current chain)
+// OmniRoute free-coding Combo Manager
+// Delegates to python create_combo.py (standard library sqlite3, zero dependencies)
+// or uses better-sqlite3 if installed.
 
-const Database = require('better-sqlite3');
-const crypto = require('crypto');
-const uuidv4 = () => crypto.randomUUID();
+const { spawnSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
-// Get provider connection ID dynamically
-function getConnectionId(provider) {
-  // We cannot access the database without knowing the path, so we'll return null and let the combo creation fail?
-  // Instead, we will set the connectionId to null and let the OmniRoute server handle it?
-  // But the combo creation requires a connectionId.
-  // We will have to query the database for the connection id.
-  // We will pass the database path as an environment variable or use the default.
-  const dbPath = process.env.OMNIROUTE_DB_PATH ||
-                 (process.platform === 'win32'
-                     ? `${process.env.USERPROFILE}\\.omniroute\\storage.sqlite`
-                     : `${process.env.HOME}/.omniroute/storage.sqlite`);
-  try {
-    const db = new Database(dbPath);
-    const conn = db.prepare("SELECT id FROM provider_connections WHERE provider = ? AND is_active = 1 LIMIT 1").get(provider);
-    db.close();
-    return conn ? conn.id : null;
-  } catch (e) {
-    console.error('Error accessing OmniRoute database:', e.message);
-    return null;
-  }
-}
-
-// Get existing combo data or return default
-function getExistingCombo() {
-  const dbPath = process.env.OMNIROUTE_DB_PATH ||
-                 (process.platform === 'win32'
-                     ? `${process.env.USERPROFILE}\\.omniroute\\storage.sqlite`
-                     : `${process.env.HOME}/.omniroute/storage.sqlite`);
-  try {
-    const db = new Database(dbPath);
-    const existing = db.prepare("SELECT id, data FROM combos WHERE name = ?").get('free-coding-stable');
-    db.close();
-    if (existing) {
-      try {
-        return { dbId: existing.id, data: JSON.parse(existing.data) };
-      } catch(e) {}
-    }
-    return null;
-  } catch (e) {
-    console.error('Error accessing OmniRoute database:', e.message);
-    return null;
-  }
-}
-
-// Save combo back to DB
-function saveCombo(comboData) {
-  const dbPath = process.env.OMNIROUTE_DB_PATH ||
-                 (process.platform === 'win32'
-                     ? `${process.env.USERPROFILE}\\.omniroute\\storage.sqlite`
-                     : `${process.env.HOME}/.omniroute/storage.sqlite`);
-  try {
-    const db = new Database(dbPath);
-    const now = new Date().toISOString();
-    comboData.updatedAt = now;
-
-    const existing = db.prepare("SELECT id FROM combos WHERE name = ?").get('free-coding-stable');
-    const dbId = existing ? existing.id : (comboData.id || uuidv4());
-    comboData.id = dbId;
-
-    if (existing) {
-      db.prepare("DELETE FROM combos WHERE name = ?").run('free-coding-stable');
-      db.prepare("DELETE FROM model_combo_mappings WHERE combo_id = ?").run(dbId);
-    }
-
-    db.prepare(
-      "INSERT INTO combos (id, name, data, sort_order, created_at, updated_at, context_cache_protection) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(dbId, 'free-coding-stable', JSON.stringify(comboData), 1, comboData.createdAt || now, now, 0);
-
-    console.log(`\n✓ Successfully updated combo "free-coding-stable" in OmniRoute SQLite DB!`);
-    console.log('  Current priority order:');
-    comboData.models.forEach((m, i) => {
-      console.log(`    #${i+1}: [${m.providerId}] ${m.model}`);
-    });
-    db.close();
-  } catch (e) {
-    console.error('Error saving combo:', e.message);
-    process.exit(1);
-  }
-}
-
-// Default models if initializing from scratch
-const DEFAULT_MODELS = [
-  { provider: 'openrouter', model: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'NVIDIA Nemotron 3 Super 120B (OpenRouter Free)' },
-  { provider: 'openrouter', model: 'poolside/laguna-s-2.1:free', label: 'Poolside Laguna S 2.1 (OpenRouter Free)' },
-  { provider: 'openrouter', model: 'google/gemma-4-31b-it:free', label: 'Google Gemma 4 31B IT (OpenRouter Free)' },
-  { provider: 'openrouter', model: 'openrouter/free', label: 'OpenRouter Free Auto-Router' }
-];
-
-// CLI Handler
+const pyScript = path.join(__dirname, 'create_combo.py');
 const args = process.argv.slice(2);
-const command = args[0] ? args[0].toLowerCase() : 'sync';
 
-if (command === 'list') {
-  const current = getExistingCombo();
-  if (!current) {
-    console.log(`Combo "free-coding-stable" does not exist yet.`);
-  } else {
-    console.log(`\n--- Combo "free-coding-stable" (${current.data.strategy}) ---`);
-    current.data.models.forEach((m, i) => {
-      console.log(`  #${i+1}: [${m.providerId}] ${m.model}`);
-    });
-  }
-  process.exit(0);
+// Check if Python is available
+const pyCheck = spawnSync('python', ['--version'], { encoding: 'utf8' });
+if (pyCheck.status === 0 && fs.existsSync(pyScript)) {
+  const result = spawnSync('python', [pyScript, ...args], { stdio: 'inherit' });
+  process.exit(result.status ?? 0);
 }
 
-if (command === 'add') {
-  const provider = args[1];
-  const modelSlug = args[2];
+// Fallback to better-sqlite3 if python is not available
+try {
+  const Database = require('better-sqlite3');
+  const crypto = require('crypto');
+  const uuidv4 = () => crypto.randomUUID();
 
-  if (!provider || !modelSlug) {
-    console.log('Usage: node create_combo.js add <provider> <model_slug>');
-    console.log('Example: node create_combo.js add openrouter openrouter/deepseek/deepseek-r1:free');
-    process.exit(1);
+  const dbPath = process.env.OMNIROUTE_DB_PATH ||
+    (process.platform === 'win32'
+      ? `${process.env.USERPROFILE}\\.omniroute\\storage.sqlite`
+      : `${process.env.HOME}/.omniroute/storage.sqlite`);
+
+  const db = new Database(dbPath);
+  const command = args[0] ? args[0].toLowerCase() : 'sync';
+
+  if (command === 'list') {
+    const row = db.prepare("SELECT data FROM combos WHERE name = ?").get('free-coding');
+    if (!row) {
+      console.log('Combo "free-coding" does not exist yet.');
+    } else {
+      const data = JSON.parse(row.data);
+      console.log(`\n--- Combo "free-coding" (${data.strategy}) ---`);
+      (data.models || []).forEach((m, i) => {
+        console.log(`  #${i + 1}: [${m.providerId}] ${m.model}`);
+      });
+    }
+    db.close();
+    process.exit(0);
   }
 
-  let current = getExistingCombo();
-  if (!current) {
-    // initialize
-    const now = new Date().toISOString();
-    current = {
-      data: {
-        id: uuidv4(),
-        name: 'free-coding-stable',
-        models: [],
-        strategy: 'priority',
-        config: {},
-        isHidden: false,
-        sortOrder: 1,
-        description: 'Deterministic free coding combo',
-        createdAt: now,
-        updatedAt: now,
-        schemaVersion: 2
-      }
+  // Sync / apply
+  const now = new Date().toISOString();
+  const existing = db.prepare("SELECT id, data FROM combos WHERE name = ?").get('free-coding');
+  let comboData;
+  if (existing) {
+    comboData = JSON.parse(existing.data);
+    comboData.updatedAt = now;
+  } else {
+    comboData = {
+      id: uuidv4(),
+      name: 'free-coding',
+      models: [],
+      strategy: 'priority',
+      config: { maxRetries: 3, retryDelayMs: 500, trackMetrics: true },
+      isHidden: false,
+      sortOrder: 1,
+      description: 'Deterministic priority fallback chain for free coding.',
+      createdAt: now,
+      updatedAt: now,
+      version: 2,
+      isActive: true
     };
   }
 
-  const connId = getConnectionId(provider);
-  const stepId = `${provider}-${modelSlug.replace(/[^a-zA-Z0-9]/g, '-')}`.toLowerCase();
-
-  // Check if model already exists
-  const existingIdx = current.data.models.findIndex(m => m.model === modelSlug);
-  if (existingIdx !== -1) {
-    console.log(`Model "${modelSlug}" already exists at position #${existingIdx + 1}. Updating...`);
-    current.data.models[existingIdx].providerId = provider;
-    current.data.models[existingIdx].connectionId = connId;
-  } else {
-    current.data.models.push({
-      id: stepId,
-      kind: 'model',
-      model: modelSlug,
-      providerId: provider,
-      connectionId: connId,
-      weight: 1,
-      label: `${modelSlug} (${provider})`,
-      tags: ['free', 'coding']
-    });
+  const dbId = existing ? existing.id : comboData.id;
+  comboData.id = dbId;
+  if (existing) {
+    db.prepare("DELETE FROM combos WHERE name = ?").run('free-coding');
+    db.prepare("DELETE FROM model_combo_mappings WHERE combo_id = ?").run(dbId);
   }
+  db.prepare(
+    "INSERT INTO combos (id, name, data, sort_order, created_at, updated_at, context_cache_protection) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(dbId, 'free-coding', JSON.stringify(comboData), 1, comboData.createdAt || now, now, 0);
 
-  saveCombo(current.data);
-  process.exit(0);
+  console.log('\n✓ Successfully updated combo "free-coding" in OmniRoute SQLite DB!');
+  (comboData.models || []).forEach((m, i) => {
+    console.log(`  #${i + 1}: [${m.providerId}] ${m.model}`);
+  });
+  db.close();
+} catch (err) {
+  console.error('Error running combo manager:', err.message);
+  console.error('Hint: Install Python (with built-in sqlite3) or run "npm install better-sqlite3".');
+  process.exit(1);
 }
-
-if (command === 'remove') {
-  const modelSlug = args[1];
-  if (!modelSlug) {
-    console.log('Usage: node create_combo.js remove <model_slug>');
-    process.exit(1);
-  }
-
-  const current = getExistingCombo();
-  if (!current) {
-    console.log(`Combo "free-coding-stable" does not exist.`);
-    process.exit(1);
-  }
-
-  const initialLen = current.data.models.length;
-  current.data.models = current.data.models.filter(m => m.model !== modelSlug && !m.model.includes(modelSlug));
-
-  if (current.data.models.length === initialLen) {
-    console.log(`Model matching "${modelSlug}" not found in combo.`);
-  } else {
-    saveCombo(current.data);
-  }
-  process.exit(0);
-}
-
-// Default: sync/reset combo with DEFAULT_MODELS
-const now = new Date().toISOString();
-const modelsList = DEFAULT_MODELS.map(m => ({
-  id: `${m.provider}-${m.model.replace(/[^a-zA-Z0-9]/g, '-')}`.toLowerCase(),
-  kind: 'model',
-  model: m.model,
-  providerId: m.provider,
-  connectionId: getConnectionId(m.provider),
-  weight: 1,
-  label: m.label,
-  tags: ['free', 'coding']
-}));
-
-const comboData = {
-  id: uuidv4(),
-  name: 'free-coding-stable',
-  models: modelsList,
-  strategy: 'priority',
-  config: {},
-  isHidden: false,
-  sortOrder: 1,
-  description: 'Deterministic priority fallback chain using verified free models.',
-  createdAt: now,
-  updatedAt: now,
-  schemaVersion: 2
-};
-
-saveCombo(comboData);
