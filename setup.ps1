@@ -12,7 +12,7 @@ function Write-Err { param([string]$Message) Write-Host $Message -ForegroundColo
 
 Write-Host ""
 Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
-Write-Host "|             OmniRoute free-coding Setup                  |" -ForegroundColor Magenta
+Write-Host "|             OmniRoute inf-ai Setup                  |" -ForegroundColor Magenta
 Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
 Write-Host ""
 
@@ -39,12 +39,19 @@ if ($missing.Count -gt 0) {
 }
 Write-Ok "  All prerequisites found."
 
+$omniroutePort = if ([string]::IsNullOrWhiteSpace($env:OMNIROUTE_PORT)) { "20128" } else { $env:OMNIROUTE_PORT }
+if ($omniroutePort -notmatch '^[0-9]+$' -or [int]$omniroutePort -lt 1 -or [int]$omniroutePort -gt 65535) {
+    Write-Err "Invalid OMNIROUTE_PORT: $omniroutePort"
+    exit 1
+}
+Write-Info "  OmniRoute endpoint: http://localhost:$omniroutePort"
+
 # --- Step 2: Ensure OmniRoute server is running ---
 Write-Info "Step 2/5: Checking OmniRoute server..."
 
 $serverRunning = $false
 try {
-    $health = omniroute health --timeout 3000 2>&1
+    omniroute health --timeout 3000 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         $serverRunning = $true
     }
@@ -60,7 +67,7 @@ if (-not $serverRunning) {
     for ($i = 1; $i -le $maxWait; $i++) {
         Start-Sleep -Seconds 2
         try {
-            $health = omniroute health --timeout 3000 2>&1
+            omniroute health --timeout 3000 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 $serverRunning = $true
                 break
@@ -69,7 +76,9 @@ if (-not $serverRunning) {
         Write-Host "    Still waiting... ($i/$maxWait)`r" -ForegroundColor DarkYellow -NoNewline
     }
     if (-not $serverRunning) {
-        Write-Warn "OmniRoute server not detected yet, continuing with offline SQLite configuration..."
+        Write-Err "OmniRoute did not become healthy at http://localhost:$omniroutePort after 30 seconds. Setup stopped before writing client configuration."
+        Write-Host "Check the port and start the server, then run setup again." -ForegroundColor Yellow
+        exit 1
     } else {
         Write-Ok "  OmniRoute server is ready."
     }
@@ -77,18 +86,19 @@ if (-not $serverRunning) {
     Write-Ok "  OmniRoute server is already running."
 }
 
-# --- Step 3: Create/Update the free-coding combo ---
-Write-Info "Step 3/5: Configuring the free-coding model combo..."
+# --- Step 3: Create/Update the inf-ai combo ---
+Write-Info "Step 3/5: Configuring the inf-ai model combo..."
 
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $scriptRan = $false
 if (Get-Command python -ErrorAction SilentlyContinue) {
-    $comboResult = python create_combo.py sync 2>&1
+    $comboResult = python "$scriptDir\create_combo.py" sync 2>&1
     if ($LASTEXITCODE -eq 0) {
         $scriptRan = $true
     }
 }
 if (-not $scriptRan -and (Get-Command node -ErrorAction SilentlyContinue)) {
-    $comboResult = node create_combo.js sync 2>&1
+    $comboResult = node "$scriptDir\create_combo.js" sync 2>&1
     if ($LASTEXITCODE -eq 0) {
         $scriptRan = $true
     }
@@ -98,11 +108,11 @@ if (-not $scriptRan) {
     Write-Err "Failed to configure combo: $comboResult"
     exit 1
 }
-Write-Ok "  Combo 'free-coding' configured successfully."
+Write-Ok "  Combo 'inf-ai' configured successfully."
 Write-Host $comboResult
 
 # --- Step 4: Configure Claude Code environment ---
-Write-Info "Step 4/5: Configuring Claude Code profile 'free-coding'..."
+Write-Info "Step 4/5: Configuring Claude Code profile 'inf-ai'..."
 
 # Remove legacy profile if present
 $legacyProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\ollama-local-qwen2-5-coder-7b"
@@ -115,17 +125,17 @@ if (Test-Path $legacyProfileDir) {
     }
 }
 
-$claudeProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\free-coding"
+$claudeProfileDir = Join-Path $env:USERPROFILE ".claude\profiles\inf-ai"
 if (-not (Test-Path $claudeProfileDir)) {
     New-Item -ItemType Directory -Path $claudeProfileDir -Force | Out-Null
 }
 
 $claudeSettings = [ordered]@{
     '$schema' = 'https://json.schemastore.org/claude-code-settings.json'
-    model = 'free-coding'
+    model = 'inf-ai'
     env = [ordered]@{
-        ANTHROPIC_BASE_URL = 'http://localhost:20128'
-        ANTHROPIC_MODEL = 'free-coding'
+        ANTHROPIC_BASE_URL = "http://localhost:$omniroutePort"
+        ANTHROPIC_MODEL = 'inf-ai'
         CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
         CLAUDE_CODE_AUTO_COMPACT_WINDOW = '190000'
         CLAUDE_CODE_DISABLE_THINKING = '1'
@@ -139,8 +149,8 @@ $claudeSettings = [ordered]@{
 } | ConvertTo-Json -Depth 5
 Set-Content -Path (Join-Path $claudeProfileDir "settings.json") -Value $claudeSettings -Encoding UTF8
 
-Write-Ok "  Claude Code profile written to ~/.claude/profiles/free-coding/settings.json"
-Write-Host "    Activate it with: omniroute launch --profile free-coding" -ForegroundColor Gray
+Write-Ok "  Claude Code profile written to ~/.claude/profiles/inf-ai/settings.json"
+Write-Host "    Activate it with: omniroute launch --profile inf-ai" -ForegroundColor Gray
 
 # --- Step 5: Configure OpenCode environment ---
 Write-Info "Step 5/5: Configuring OpenCode environment..."
@@ -159,12 +169,12 @@ $opencodeConfig = [ordered]@{
             name = 'OmniRoute'
             npm = '@ai-sdk/openai-compatible'
             options = [ordered]@{
-                baseURL = 'http://localhost:20128/v1'
+                baseURL = "http://localhost:$omniroutePort/v1"
                 apiKey = 'sk-omniroute'
             }
             models = [ordered]@{
-                'free-coding' = [ordered]@{
-                    name = 'free-coding'
+                'inf-ai' = [ordered]@{
+                    name = 'inf-ai'
                     limit = [ordered]@{
                         context = 128000
                         input = 128000
@@ -174,12 +184,12 @@ $opencodeConfig = [ordered]@{
             }
         }
     }
-    model = 'omniroute/free-coding'
+    model = 'omniroute/inf-ai'
 } | ConvertTo-Json -Depth 5
 Set-Content -Path $opencodeConfigPath -Value $opencodeConfig -Encoding UTF8
 
 Write-Ok "  OpenCode config written to ~/.config/opencode/opencode.json"
-Write-Host "    Activate it with: opencode (default model: omniroute/free-coding)" -ForegroundColor Gray
+Write-Host "    Activate it with: opencode (default model: omniroute/inf-ai)" -ForegroundColor Gray
 
 # --- Done ---
 Write-Host ""
@@ -188,12 +198,12 @@ Write-Host "|  Setup complete!                                         |" -Foreg
 Write-Host "+----------------------------------------------------------+" -ForegroundColor Magenta
 Write-Host "|                                                          |" -ForegroundColor Magenta
 Write-Host "|  Claude Code:                                            |" -ForegroundColor Magenta
-Write-Host "|    omniroute launch --profile free-coding                |" -ForegroundColor White
-Write-Host "|    (or: claude --profile free-coding)                    |" -ForegroundColor Gray
+Write-Host "|    omniroute launch --profile inf-ai                |" -ForegroundColor White
+Write-Host "|    (or: claude --profile inf-ai)                    |" -ForegroundColor Gray
 Write-Host "|                                                          |" -ForegroundColor Magenta
 Write-Host "|  OpenCode:                                               |" -ForegroundColor Magenta
 Write-Host "|    opencode                                              |" -ForegroundColor White
-Write-Host "|    (or: opencode -m omniroute/free-coding)               |" -ForegroundColor Gray
+Write-Host "|    (or: opencode -m omniroute/inf-ai)               |" -ForegroundColor Gray
 Write-Host "|                                                          |" -ForegroundColor Magenta
 Write-Host "|  Manage models:                                          |" -ForegroundColor Magenta
 Write-Host "|    python create_combo.py add <provider> <model_slug>    |" -ForegroundColor White

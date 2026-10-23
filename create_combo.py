@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OmniRoute free-coding Combo Manager
+OmniRoute inf-ai Combo Manager
 Usage:
   python create_combo.py                             (sync/apply combo)
   python create_combo.py list                        (shows current chain)
@@ -32,7 +32,7 @@ def get_active_providers(conn):
     cursor.execute("SELECT id, provider FROM provider_connections WHERE is_active = 1")
     return {row[1]: row[0] for row in cursor.fetchall()}
 
-def get_existing_combo(conn, combo_name="free-coding"):
+def get_existing_combo(conn, combo_name="inf-ai"):
     cursor = conn.cursor()
     cursor.execute("SELECT id, data FROM combos WHERE name = ?", (combo_name,))
     row = cursor.fetchone()
@@ -43,7 +43,7 @@ def get_existing_combo(conn, combo_name="free-coding"):
             pass
     return None
 
-def save_combo(conn, combo_data, combo_name="free-coding"):
+def save_combo(conn, combo_data, combo_name="inf-ai"):
     now = datetime.now(timezone.utc).isoformat()
     combo_data["updatedAt"] = now
     db_id = combo_data.get("id") or str(uuid.uuid4())
@@ -68,7 +68,7 @@ def save_combo(conn, combo_data, combo_name="free-coding"):
     for i, m in enumerate(combo_data.get("models", [])):
         print(f"    #{i+1}: [{m.get('providerId')}] {m.get('model')}")
 
-def list_combo(conn, combo_name="free-coding"):
+def list_combo(conn, combo_name="inf-ai"):
     combo = get_existing_combo(conn, combo_name)
     if not combo:
         print(f'Combo "{combo_name}" does not exist yet.')
@@ -79,7 +79,7 @@ def list_combo(conn, combo_name="free-coding"):
     for i, m in enumerate(models):
         print(f"  #{i+1}: [{m.get('providerId')}] {m.get('model')}")
 
-def add_model(conn, provider, model_slug, combo_name="free-coding"):
+def add_model(conn, provider, model_slug, combo_name="inf-ai"):
     combo = get_existing_combo(conn, combo_name)
     now = datetime.now(timezone.utc).isoformat()
     if not combo:
@@ -129,7 +129,7 @@ def add_model(conn, provider, model_slug, combo_name="free-coding"):
     combo["data"]["models"] = models
     save_combo(conn, combo["data"], combo_name)
 
-def remove_model(conn, model_slug, combo_name="free-coding"):
+def remove_model(conn, model_slug, combo_name="inf-ai"):
     combo = get_existing_combo(conn, combo_name)
     if not combo:
         print(f'Combo "{combo_name}" does not exist.')
@@ -145,35 +145,42 @@ def remove_model(conn, model_slug, combo_name="free-coding"):
         combo["data"]["models"] = models
         save_combo(conn, combo["data"], combo_name)
 
-def sync_combo(conn, combo_name="free-coding"):
+def sync_combo(conn, combo_name="inf-ai", force_reset=False):
     existing = get_existing_combo(conn, combo_name)
     active_providers = get_active_providers(conn)
 
-    if existing and existing["data"].get("models"):
-        # Refresh connection IDs in case providers were re-linked
+    # Purge local models and problematic 403 models if present
+    if existing and existing["data"].get("models") and not force_reset:
         combo_data = existing["data"]
-        for m in combo_data["models"]:
-            prov = m.get("providerId")
-            if prov in active_providers:
-                m["connectionId"] = active_providers[prov]
-        save_combo(conn, combo_data, combo_name)
-        return
+        # Remove any local or 403 models
+        combo_data["models"] = [
+            m for m in combo_data["models"]
+            if m.get("providerId") != "ollama-local"
+            and "qwen2.5-coder" not in (m.get("model") or "").lower()
+            and m.get("providerId") != "opencode"
+            and not (m.get("model") or "").lower().startswith("opencode/")
+        ]
+        if combo_data["models"]:
+            for m in combo_data["models"]:
+                prov = m.get("providerId")
+                if prov in active_providers:
+                    m["connectionId"] = active_providers[prov]
+            save_combo(conn, combo_data, combo_name)
+            return
 
-    # If initializing new, configure models based on active providers
+    # Verified cloud models matching documentation & active providers
     candidate_models = [
-        ("ollama-cloud", "ollama-cloud/gemma4:31b", "Ollama Cloud Gemma 4 31B"),
-        ("nvidia", "nvidia/openai/gpt-oss-20b", "NVIDIA GPT OSS 20B"),
-        ("opencode", "opencode/big-pickle", "OpenCode Big Pickle"),
-        ("ollama-local", "ollama-local/qwen2.5-coder:7b", "Ollama Local Qwen 2.5 Coder 7B"),
-        ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", "Nemotron 3 Super 120B (OpenRouter Free)"),
-        ("openrouter", "poolside/laguna-s-2.1:free", "Poolside Laguna S (OpenRouter Free)"),
-        ("openrouter", "google/gemma-4-31b-it:free", "Google Gemma 4 (OpenRouter Free)"),
-        ("openrouter", "openrouter/free", "OpenRouter Free Auto-Router"),
+        ("groq", "qwen/qwen3.8-27b", "Groq Qwen 3.8 27B"),
+        ("openrouter", "nvidia/nemotron-3.5-super-vl:free", "OpenRouter Nemotron 3.5 Super VL (Free)"),
+        ("nvidia", "deepseek-ai/deepseek-coder-6.7b-instruct", "NVIDIA DeepSeek Coder 6.7B"),
+        ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash"),
+        ("deepinfra", "nvidia/NVIDIA-Nemotron-3.5-Super-VL", "DeepInfra Nemotron 3.5 Super VL"),
     ]
 
     models_list = []
     for prov, model, label in candidate_models:
-        if prov in active_providers or not active_providers:
+        # Include if provider is active or if provider is openrouter (standard fallback)
+        if prov in active_providers or prov == "openrouter":
             models_list.append({
                 "id": f"{combo_name}-{prov}-{model.replace('/', '-').replace(':', '-')}".lower(),
                 "kind": "model",
@@ -197,7 +204,7 @@ def sync_combo(conn, combo_name="free-coding"):
         },
         "isHidden": False,
         "sortOrder": 1,
-        "description": "Deterministic priority fallback chain for free coding.",
+        "description": "Deterministic priority fallback chain for free coding models.",
         "createdAt": now,
         "updatedAt": now,
         "version": 2,
@@ -231,8 +238,10 @@ def main():
             remove_model(conn, args[1])
         elif command in ("sync", "apply"):
             sync_combo(conn)
+        elif command in ("reset", "init"):
+            sync_combo(conn, force_reset=True)
         else:
-            print(f"Unknown command '{command}'. Available: sync, list, add, remove")
+            print(f"Unknown command '{command}'. Available: sync, reset, list, add, remove")
             sys.exit(1)
     finally:
         conn.close()

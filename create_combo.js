@@ -1,4 +1,4 @@
-// OmniRoute free-coding Combo Manager
+// OmniRoute inf-ai Combo Manager
 // Delegates to python create_combo.py (standard library sqlite3, zero dependencies)
 // or uses better-sqlite3 if installed.
 
@@ -31,12 +31,12 @@ try {
   const command = args[0] ? args[0].toLowerCase() : 'sync';
 
   if (command === 'list') {
-    const row = db.prepare("SELECT data FROM combos WHERE name = ?").get('free-coding');
+    const row = db.prepare("SELECT data FROM combos WHERE name = ?").get('inf-ai');
     if (!row) {
-      console.log('Combo "free-coding" does not exist yet.');
+      console.log('Combo "inf-ai" does not exist yet.');
     } else {
       const data = JSON.parse(row.data);
-      console.log(`\n--- Combo "free-coding" (${data.strategy}) ---`);
+      console.log(`\n--- Combo "inf-ai" (${data.strategy}) ---`);
       (data.models || []).forEach((m, i) => {
         console.log(`  #${i + 1}: [${m.providerId}] ${m.model}`);
       });
@@ -47,7 +47,7 @@ try {
 
   // Sync / apply
   const now = new Date().toISOString();
-  const existing = db.prepare("SELECT id, data FROM combos WHERE name = ?").get('free-coding');
+  const existing = db.prepare("SELECT id, data FROM combos WHERE name = ?").get('inf-ai');
   let comboData;
   if (existing) {
     comboData = JSON.parse(existing.data);
@@ -55,7 +55,7 @@ try {
   } else {
     comboData = {
       id: uuidv4(),
-      name: 'free-coding',
+      name: 'inf-ai',
       models: [],
       strategy: 'priority',
       config: { maxRetries: 3, retryDelayMs: 500, trackMetrics: true },
@@ -72,14 +72,18 @@ try {
   const dbId = existing ? existing.id : comboData.id;
   comboData.id = dbId;
   if (existing) {
-    db.prepare("DELETE FROM combos WHERE name = ?").run('free-coding');
+    comboData.models = (comboData.models || []).filter((model) =>
+      model.providerId !== 'opencode' &&
+      !(model.model || '').toLowerCase().startsWith('opencode/')
+    );
+    db.prepare("DELETE FROM combos WHERE name = ?").run('inf-ai');
     db.prepare("DELETE FROM model_combo_mappings WHERE combo_id = ?").run(dbId);
   }
   db.prepare(
     "INSERT INTO combos (id, name, data, sort_order, created_at, updated_at, context_cache_protection) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(dbId, 'free-coding', JSON.stringify(comboData), 1, comboData.createdAt || now, now, 0);
+  ).run(dbId, 'inf-ai', JSON.stringify(comboData), 1, comboData.createdAt || now, now, 0);
 
-  console.log('\n✓ Successfully updated combo "free-coding" in OmniRoute SQLite DB!');
+  console.log('\n✓ Successfully updated combo "inf-ai" in OmniRoute SQLite DB!');
   (comboData.models || []).forEach((m, i) => {
     console.log(`  #${i + 1}: [${m.providerId}] ${m.model}`);
   });

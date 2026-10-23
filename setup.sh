@@ -21,7 +21,7 @@ print_error() { echo -e "${RED}$1${NC}"; }
 
 echo ""
 echo -e "${MAGENTA}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${MAGENTA}║             OmniRoute free-coding Setup                  ║${NC}"
+echo -e "${MAGENTA}║             OmniRoute inf-ai Setup                  ║${NC}"
 echo -e "${MAGENTA}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -48,6 +48,13 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 print_success "  All prerequisites found."
 
+OMNIROUTE_PORT="${OMNIROUTE_PORT:-20128}"
+if ! [[ "$OMNIROUTE_PORT" =~ ^[0-9]+$ ]] || [ "$OMNIROUTE_PORT" -lt 1 ] || [ "$OMNIROUTE_PORT" -gt 65535 ]; then
+  print_error "Invalid OMNIROUTE_PORT: $OMNIROUTE_PORT"
+  exit 1
+fi
+print_status "  OmniRoute endpoint: http://localhost:$OMNIROUTE_PORT"
+
 # --- Step 2: Ensure OmniRoute server is running ---
 print_status "Step 2/5: Checking OmniRoute server..."
 
@@ -69,12 +76,14 @@ else
         echo -ne "    Still waiting... ($i/$((max_wait/2)))\r"
     done
     if [ "$ready" = false ]; then
-        print_warning "OmniRoute server not detected yet, continuing with offline SQLite configuration..."
+      print_error "OmniRoute did not become healthy at http://localhost:$OMNIROUTE_PORT after 30 seconds. Setup stopped before writing client configuration."
+      echo "Check the port and start the server, then run setup again."
+      exit 1
     fi
 fi
 
-# --- Step 3: Create/Update the free-coding combo ---
-print_status "Step 3/5: Configuring the free-coding model combo..."
+# --- Step 3: Create/Update the inf-ai combo ---
+print_status "Step 3/5: Configuring the inf-ai model combo..."
 
 if command -v python3 &> /dev/null; then
     python3 create_combo.py sync
@@ -83,10 +92,10 @@ elif command -v python &> /dev/null; then
 else
     node create_combo.js sync
 fi
-print_success "  Combo 'free-coding' configured successfully."
+print_success "  Combo 'inf-ai' configured successfully."
 
 # --- Step 4: Configure Claude Code environment ---
-print_status "Step 4/5: Configuring Claude Code profile 'free-coding'..."
+print_status "Step 4/5: Configuring Claude Code profile 'inf-ai'..."
 
 # Remove legacy profile if present
 LEGACY_PROFILE_DIR="$HOME/.claude/profiles/ollama-local-qwen2-5-coder-7b"
@@ -95,16 +104,16 @@ if [ -d "$LEGACY_PROFILE_DIR" ]; then
     print_success "  Removed legacy profile: ~/.claude/profiles/ollama-local-qwen2-5-coder-7b"
 fi
 
-CLAUDE_PROFILE_DIR="$HOME/.claude/profiles/free-coding"
+CLAUDE_PROFILE_DIR="$HOME/.claude/profiles/inf-ai"
 mkdir -p "$CLAUDE_PROFILE_DIR"
 
 cat > "$CLAUDE_PROFILE_DIR/settings.json" << 'EOF'
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "model": "free-coding",
+  "model": "inf-ai",
   "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:20128",
-    "ANTHROPIC_MODEL": "free-coding",
+    "ANTHROPIC_BASE_URL": "http://localhost:${OMNIROUTE_PORT}",
+    "ANTHROPIC_MODEL": "inf-ai",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
     "CLAUDE_CODE_DISABLE_THINKING": "1",
@@ -118,8 +127,8 @@ cat > "$CLAUDE_PROFILE_DIR/settings.json" << 'EOF'
 }
 EOF
 
-print_success "  Claude Code profile written to ~/.claude/profiles/free-coding/settings.json"
-echo -e "${GRAY}    Activate it with: omniroute launch --profile free-coding${NC}"
+print_success "  Claude Code profile written to ~/.claude/profiles/inf-ai/settings.json"
+echo -e "${GRAY}    Activate it with: omniroute launch --profile inf-ai${NC}"
 
 # --- Step 5: Configure OpenCode environment ---
 print_status "Step 5/5: Configuring OpenCode environment..."
@@ -135,12 +144,12 @@ cat > "$OPENCODE_CONFIG_DIR/opencode.json" << 'EOF'
       "name": "OmniRoute",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://localhost:20128/v1",
+        "baseURL": "http://localhost:${OMNIROUTE_PORT}/v1",
         "apiKey": "sk-omniroute"
       },
       "models": {
-        "free-coding": {
-          "name": "free-coding",
+        "inf-ai": {
+          "name": "inf-ai",
           "limit": {
             "context": 128000,
             "input": 128000,
@@ -150,12 +159,12 @@ cat > "$OPENCODE_CONFIG_DIR/opencode.json" << 'EOF'
       }
     }
   },
-  "model": "omniroute/free-coding"
+  "model": "omniroute/inf-ai"
 }
 EOF
 
 print_success "  OpenCode config written to ~/.config/opencode/opencode.json"
-echo -e "${GRAY}    Activate it with: opencode (default model: omniroute/free-coding)${NC}"
+echo -e "${GRAY}    Activate it with: opencode (default model: omniroute/inf-ai)${NC}"
 
 # --- Done ---
 echo ""
@@ -164,12 +173,12 @@ echo -e "${MAGENTA}║  Setup complete!                                        �
 echo -e "${MAGENTA}╠══════════════════════════════════════════════════════════╣${NC}"
 echo -e "${MAGENTA}║                                                          ║${NC}"
 echo -e "${MAGENTA}║  Claude Code:                                           ║${NC}"
-echo -e "${MAGENTA}║    omniroute launch --profile free-coding               ║${NC}"
-echo -e "${MAGENTA}║    (or: claude --profile free-coding)                   ║${NC}"
+echo -e "${MAGENTA}║    omniroute launch --profile inf-ai               ║${NC}"
+echo -e "${MAGENTA}║    (or: claude --profile inf-ai)                   ║${NC}"
 echo -e "${MAGENTA}║                                                          ║${NC}"
 echo -e "${MAGENTA}║  OpenCode:                                              ║${NC}"
 echo -e "${MAGENTA}║    opencode                                             ║${NC}"
-echo -e "${MAGENTA}║    (or: opencode -m omniroute/free-coding)              ║${NC}"
+echo -e "${MAGENTA}║    (or: opencode -m omniroute/inf-ai)              ║${NC}"
 echo -e "${MAGENTA}║                                                          ║${NC}"
 echo -e "${MAGENTA}║  Manage models:                                         ║${NC}"
 echo -e "${MAGENTA}║    python create_combo.py add <provider> <model_slug>   ║${NC}"
