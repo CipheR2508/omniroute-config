@@ -52,9 +52,34 @@ python create_combo.py add <provider> <model_slug>
 # Remove a model from the chain
 python create_combo.py remove <model_slug>
 
-# Sync / refresh the combo
+# Rebuild the combo from the verified list
 python create_combo.py sync
 ```
+
+`sync` rebuilds the chain instead of patching the previous one, so stale entries
+cannot keep poisoning requests. A model is only written to the combo when:
+
+1. its provider has an active connection in OmniRoute,
+2. the model exists in the catalog OmniRoute synced from that provider, and
+3. its recent call logs do not show it failing (missing model, uptime, quota or
+   API errors such as HTTP 400/401/402/403/404/410/429/5xx).
+
+Any excluded model is printed with the reason, for example:
+
+```text
+[SKIPPED] Models excluded to avoid missing-model / uptime / API errors:
+  - [gemini] gemini-3.8-flash: 3 recent attempts without a success (last HTTP 499)
+  - [groq] openai/gpt-oss-20b: 3 recent attempts without a success (last HTTP 502)
+```
+
+The combo is also configured to fail fast: `maxRetries: 0`,
+`failoverBeforeRetry: true`, per-target health checks, and no retry delay. A
+target that returns an error is skipped, not retried, and the next verified
+model is used.
+
+> `add` / `remove` change the current chain, but the next `sync` rebuilds it
+> from the verified list. Add models to `VERIFIED_MODELS` in `create_combo.py`
+> if they should survive a sync.
 
 ### Examples
 ```bash
@@ -89,7 +114,10 @@ If `setup.ps1` halts or fails on a new machine (execution policy restrictions, p
 
 1. `create_combo.py` accesses OmniRoute's local SQLite DB (`~/.omniroute/storage.sqlite`).
 2. Looks up active provider connections (e.g. `nvidia`, `agentrouter`, `openrouter`).
-3. Creates or updates the `inf-ai` combo with a priority-based fallback strategy using verified free models.
+3. Reads each provider's synced model catalog (`syncedAvailableModels`) and recent
+   `call_logs` outcomes, then writes the `inf-ai` combo as a priority chain of
+   models that exist and are currently working. Models that fail with missing-model,
+   uptime or API errors are skipped (and listed in the sync output).
 4. Generates `~/.claude/profiles/inf-ai/settings.json` pointing to OmniRoute (`http://localhost:20128` by default) and model `inf-ai`.
 5. Updates `~/.config/opencode/opencode.json` with the `omniroute` provider and sets default model to `omniroute/inf-ai`.
 

@@ -207,6 +207,52 @@ Close any active Claude Code or OpenCode terminal windows before running `setup.
 
 ---
 
+## 9. Combo Falls Back Into Broken Models
+
+### Symptom
+Requests routed through `inf-ai` end with one of these instead of an answer:
+```text
+[400]: <model> is not a valid model ID
+[404]: The model `<model>` does not exist or you do not have access to it
+[429]: All credentials for model <model> are cooling down
+[503]: Service temporarily unavailable: all upstream accounts are inactive
+[504]: upstream timed out
+```
+
+### Cause
+OmniRoute treats every non-OK upstream response as a reason to try the next
+combo target. If the chain contains stale model IDs, expired free models, or
+providers that are down/quota-exhausted, those errors become the chain's steady
+state (and one bad model can put its whole provider into cooldown).
+
+### Automatic Protection
+`python create_combo.py sync` now rebuilds the chain instead of keeping old
+entries:
+- only providers with an **active connection** are used,
+- only models present in the provider's **synced catalog** are used,
+- models whose recent `call_logs` show no success, a failed last attempt, or
+  only stale results are skipped,
+- the combo runs with `maxRetries: 0`, `failoverBeforeRetry: true` and
+  per-target health checks, so a broken target is skipped rather than retried.
+
+The excluded models and the exact reason are printed by `sync`, e.g.
+```text
+[SKIPPED] Models excluded to avoid missing-model / uptime / API errors:
+  - [gemini] gemini-3.8-flash: 3 recent attempts without a success (last HTTP 499)
+```
+
+### Fallback / Resolution
+- Run `python create_combo.py sync` after adding or re-authenticating a provider.
+- If a provider is temporarily down, wait for it to recover, make one successful
+  call (or `omniroute test <provider> <model>`), then `sync` again. Models with a
+  recent success are re-added automatically.
+- Change `VERIFIED_MODELS` in `create_combo.py` to add or remove candidates.
+- If every candidate is skipped, `sync` warns and keeps all catalog-valid models
+  on active providers, so the combo is never empty.
+- `add`/`remove` are temporary: the next `sync` rebuilds from `VERIFIED_MODELS`.
+
+---
+
 ## Summary Matrix
 
 | Failure Stage | Primary Cause | Automatic Fallback in Script | Manual Fix |
@@ -216,4 +262,5 @@ Close any active Claude Code or OpenCode terminal windows before running `setup.
 | **Server Health** | Configured port conflict / timeout | ❌ Retries 15 times, then halts before writing client config | Check health and the configured port; don't start a duplicate server |
 | **Database** | DB file doesn't exist yet | ❌ Halts | Launch `omniroute serve` once to initialize DB |
 | **Providers** | Zero credentials on new machine | ⚠️ Configures chain with null IDs | Run `omniroute provider add <name>` |
+| **Combo Health** | Stale model IDs / dead providers in chain | ✅ Rebuilds from verified, catalog-valid models and skips recent failures | Run `python create_combo.py sync` after a provider recovers |
 | **Config Write** | File locked by running Claude | ⚠️ Catches error, prints warning | Exit active Claude sessions |
